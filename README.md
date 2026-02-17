@@ -4,7 +4,9 @@ Repositorio de ejemplo que demuestra cómo diseñar y orquestar agentes de IA ce
 
 ## Filosofía
 
-> Un agente de IA no nace del LLM: nace del problema y del diseño del comportamiento. El LLM es una pieza poderosa, pero la orquestación —decidir cuándo actuar, cuándo parar, qué sistemas tocar y qué aprender— es lo que convierte una automatización frágil en un agente robusto y adaptable. Sin orquestación no hay agentes; solo cadenas que se rompen con el tiempo.
+> Un agente de IA no nace del LLM: nace del problema y del diseño del comportamiento. El LLM es una pieza poderosa, pero la orquestación —decidir cuándo actuar, cuándo parar, qué sistemas tocar y qué aprender— es lo que convierte una automatización frágil en un agente robusto y adaptable. **Sin orquestación no hay agentes; solo cadenas que se rompen con el tiempo.**
+
+> **La orquestación es la capa crítica que convierte automatización frágil en agentes robustos y adaptables.**
 
 ## Patrones de Orquestación Implementados
 
@@ -53,6 +55,39 @@ agent-orchestration-playbook/
 └── requirements.txt              # Dependencias
 ```
 
+## Ejemplos de Agentes Listos
+
+### 📄 **invoice_ingest/**: Ingestión de Facturas
+**Flujo completo**: extracción de campos, validación y persistencia.
+
+- **run.py**: Combina pipeline + supervisor + almacenamiento local (JSON)
+- **Características**:
+  - Extracción de campos estructurados desde facturas
+  - Validación de confianza con umbrales configurables
+  - Reintentos automáticos con backoff
+  - Persistencia en JSON local
+  - Métricas de procesamiento y errores
+
+### 🎫 **support_triage/**: Triage de Soporte
+**Clasificación inteligente**: decide si responder automáticamente o escalar a humano.
+
+- **Características**:
+  - Clasificación de tickets por prioridad y complejidad
+  - Decisión automática vs escalado humano
+  - Métricas de SLA y tiempo de respuesta
+  - Integración con sistemas de tickets
+  - Alertas para casos críticos
+
+### 🔍 **code_review/**: Revisión de Código
+**Orquestación de LLM**: genera comentarios, ejecuta pruebas y decide sobre PRs.
+
+- **Características**:
+  - Análisis automático de código
+  - Generación de comentarios constructivos
+  - Ejecución de pruebas unitarias
+  - Decisión de abrir PR o pedir revisión humana
+  - Métricas de calidad de código
+
 ## Componentes Clave
 
 ### Core Components
@@ -66,6 +101,66 @@ agent-orchestration-playbook/
 - **Storage**: Almacenamiento desacoplado (archivo/memoria)
 - **Metrics**: Colección de métricas con agregaciones
 - **Notifier**: Sistema de notificaciones multi-canal
+
+## Métricas y Observabilidad
+
+El sistema incluye métricas integradas para:
+
+- **Tareas**: Iniciadas, completadas, fallidas
+- **LLM**: Llamadas, tokens, duración
+- **Salud**: Estado general del agente
+- **Experiencia**: Decisiones del supervisor
+
+**Métricas mínimas implementadas**:
+- Latencia por llamada LLM
+- Tasa de aceptación/escalado
+- Costo estimado por request
+- Errores por tipo
+
+Implementado con `tools/metrics.py` (adaptadores para Prometheus o logs JSON).
+
+## Pruebas y Calidad
+
+### Tests Unitarios
+- **tests/test_orchestrator.py**: Cubre flujos felices, reintentos y escalado
+- **Framework**: pytest con mocks para LLM
+- **Cobertura**: Validación de todos los componentes críticos
+
+### CI/CD Pipeline
+- **.github/workflows/ci.yml**: Ejecuta lint, tests y build de Docker en cada PR
+- **Validaciones**: 
+  - Linting (black, flake8, mypy)
+  - Tests unitarios con múltiples versiones de Python
+  - Security scanning (bandit, safety)
+  - Docker build y publicación
+
+## Buenas Prácticas y Extensiones
+
+### Separación de Responsabilidades
+- **LLM Adapter**: Comunicación con proveedores LLM
+- **Orchestrator**: Flujo de ejecución
+- **Supervisor**: Políticas de decisión
+- **Tools**: Sistemas externos desacoplados
+
+### Control de Costos
+- **Cache** de prompts/respuestas
+- **Batching** y límites de concurrencia
+- **Métricas** de consumo y costos
+
+### Observabilidad
+- **Traces** distribuidos (OpenTelemetry)
+- **Logs** estructurados con correlación
+- **Dashboards** en tiempo real
+
+### Feedback Loop
+- **Almacenamiento** de experiencias para reentrenamiento
+- **Dataset** de fallos para análisis
+- **Exportación** de métricas para mejora continua
+
+### Seguridad
+- **Validación** estricta de outputs antes de tocar sistemas críticos
+- **Políticas** de permisos para acciones automatizadas
+- **Sanitización** de datos sensibles
 
 ## Configuración Rápida
 
@@ -96,6 +191,9 @@ python examples/invoice_ingest/parallel_orchestrator.py
 
 # Triage de soporte (próximamente)
 python examples/support_triage/run.py
+
+# Revisión de código (próximamente)
+python examples/code_review/run.py
 ```
 
 ### 3. Docker
@@ -104,8 +202,8 @@ python examples/support_triage/run.py
 # Construir imagen
 docker build -t agent-orchestration -f docker/Dockerfile .
 
-# Ejecutar contenedor
-docker run -p 8000:8000 agent-orchestration
+# Ejecutar con compose
+docker-compose -f docker/docker-compose.yml up -d
 ```
 
 ## Ejemplo: Procesamiento de Facturas
@@ -134,79 +232,79 @@ if decision == "accept":
     print("Factura procesada exitosamente")
 ```
 
-## Métricas y Observabilidad
+## Siguientes Pasos y Personalización
 
-El sistema incluye métricas integradas para:
-
-- **Tareas**: Iniciadas, completadas, fallidas
-- **LLM**: Llamadas, tokens, duración
-- **Salud**: Estado general del agente
-- **Experiencia**: Decisiones del supervisor
-
-Acceso a métricas:
-
+### Conectar tu LLM
+Implementa adaptadores reales en `core/llm_adapter.py`:
 ```python
-# Exportar métricas
-metrics = collector.get_all_metrics()
-
-# Formato Prometheus
-prometheus_exporter = PrometheusMetrics(collector)
-prometheus_text = prometheus_exporter.export_prometheus()
+class OpenAIAdapter(LLMAdapter):
+    def __init__(self, api_key, model="gpt-4"):
+        self.client = OpenAI(api_key=api_key)
+        self.model = model
+    
+    async def generate(self, prompt: str) -> Dict[str, Any]:
+        # Implementar con rate limits y manejo de costos
+        response = await self.client.chat.completions.create(
+            model=self.model,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return {
+            "result": response.choices[0].message.content,
+            "confidence": self._calculate_confidence(response),
+            "tokens": response.usage.total_tokens,
+            "cost": self._calculate_cost(response.usage)
+        }
 ```
 
-## Patrones de Diseño
+### Integrar Sistemas Reales
+Reemplaza `tools/storage.py` por adaptadores a:
+- **S3** para almacenamiento en la nube
+- **PostgreSQL/MySQL** para persistencia estructurada
+- **Redis** para caché y colas
+- **Sistemas internos** vía APIs REST
 
-### 1. Desacoplamiento
-- Cada componente tiene una responsabilidad única
-- Interfaces claras entre capas
-- Inyección de dependencias
-
-### 2. Resiliencia
-- Reintentos con backoff
-- Circuit breakers
-- Manejo de errores por dominio
-
-### 3. Observabilidad
-- Logging estructurado
-- Métricas detalladas
-- Trazabilidad de decisiones
-
-### 4. Escalabilidad
-- Diseño async/await
-- Procesamiento paralelo
-- Almacenamiento configurable
-
-## Extensión y Personalización
-
-### Agregar Nuevo LLM Provider
-
-```python
-from core.llm_adapter import LLMAdapter
-
-class CustomLLM(LLMAdapter):
-    def generate(self, prompt: str) -> Dict[str, Any]:
-        # Implementación personalizada
-        return {"result": "...", "confidence": 0.9}
+### Despliegue Producción
+```yaml
+# Kubernetes con Horizontal Pod Autoscaler
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: agent-orchestration-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: agent-orchestration
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+  - type: Resource
+    resource:
+      name: memory
 ```
 
-### Agregar Nuevo Canal de Notificación
-
+### Colas para Tareas Largas
 ```python
-from core.tools.notifier import NotificationChannel
+# Redis Streams para desacoplar tareas largas
+import redis.asyncio as redis
 
-class SlackNotifier(NotificationChannel):
-    async def send(self, notification):
-        # Enviar a Slack
-        pass
-```
-
-### Personalizar Supervisor
-
-```python
-class CustomSupervisor(Supervisor):
-    def decide(self, output):
-        # Lógica personalizada de decisión
-        return super().decide(output)
+class QueueOrchestrator:
+    def __init__(self):
+        self.redis = redis.Redis()
+    
+    async def submit_long_task(self, task_data):
+        # Enviar a cola Redis
+        await self.redis.xadd('long_tasks', task_data)
+    
+    async def process_results(self):
+        # Procesar resultados asíncronos
+        while True:
+            events = await self.redis.xread(['long_tasks'], block=1000)
+            for event in events:
+                await self.handle_result(event)
 ```
 
 ## Testing
@@ -216,10 +314,13 @@ class CustomSupervisor(Supervisor):
 pytest
 
 # Pruebas con cobertura
-pytest --cov=core
+pytest --cov=core --cov-report=html
 
 # Pruebas específicas
-pytest tests/test_orchestrator.py
+pytest tests/test_orchestrator.py -v
+
+# Tests de integración
+pytest tests/ -k "integration"
 ```
 
 ## Contribución
@@ -228,7 +329,7 @@ pytest tests/test_orchestrator.py
 2. Crear feature branch: `git checkout -b feature/nuevo-patron`
 3. Commit changes: `git commit -am 'Agregar nuevo patrón'`
 4. Push: `git push origin feature/nuevo-patron`
-5. Pull Request
+5. Pull Request con tests y documentación
 
 ## Licencia
 
@@ -236,12 +337,14 @@ MIT License - ver archivo LICENSE para detalles.
 
 ## Próximos Pasos
 
-- [ ] Ejemplo completo de triage de soporte
-- [ ] Integración con LLMs reales (OpenAI, Claude, etc.)
-- [ ] Dashboard de métricas en tiempo real
-- [ ] Testing de carga y estrés
-- [ ] Documentación de patrones avanzados
+- [ ] Ejemplo completo de triage de soporte con clasificación
+- [ ] Ejemplo de code review con análisis estático
+- [ ] Integración con LLMs reales (OpenAI, Claude, Azure)
+- [ ] Dashboard de métricas en tiempo real con Grafana
+- [ ] Testing de carga y estrés con Locust
+- [ ] Documentación de patrones avanzados y casos de uso
+- [ ] Implementación de circuit breakers y rate limiting
 
 ---
 
-**Recuerda**: La orquestación es la capa crítica de producción. Un buen diseño de orquestación convierte un prototipo frágil en un sistema robusto y adaptable.
+**Recuerda**: La orquestación es la capa crítica de producción. Un buen diseño de orquestación convierte un prototipo frágil en un sistema robusto y adaptable. **La orquestación es la capa crítica que convierte automatización frágil en agentes robustos y adaptables.**
