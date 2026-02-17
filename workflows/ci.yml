@@ -1,0 +1,293 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  release:
+    types: [ published ]
+
+env:
+  PYTHON_VERSION: "3.11"
+  NODE_VERSION: "18"
+
+jobs:
+  # Tests unitarios y de integración
+  test:
+    name: 🧪 Test Suite
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+        
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+          
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-cov pytest-asyncio pytest-mock
+        
+    - name: Run linting
+      run: |
+        pip install black flake8 mypy
+        black --check core/ tests/ examples/
+        flake8 core/ tests/ examples/ --max-line-length=100 --ignore=E203,W503
+        mypy core/ --ignore-missing-imports
+        
+    - name: Run unit tests
+      run: |
+        pytest tests/ -v --cov=core --cov-report=xml --cov-report=html
+        
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.xml
+        flags: unittests
+        name: codecov-umbrella
+        
+    - name: Run integration tests
+      run: |
+        python examples/invoice_ingest/run.py
+        python examples/invoice_ingest/parallel_orchestrator.py
+        
+    - name: Test Docker build
+      run: |
+        docker build -t agent-orchestration-test -f docker/Dockerfile .
+        
+    - name: Security scan
+      run: |
+        pip install bandit safety
+        bandit -r core/ -f json -o bandit-report.json
+        safety check --json --output safety-report.json
+        
+    - name: Upload security reports
+      uses: actions/upload-artifact@v3
+      with:
+        name: security-reports
+        path: |
+          bandit-report.json
+          safety-report.json
+
+  # Build y publicación de Docker image
+  build:
+    name: 🐳 Build & Publish
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name != 'pull_request'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      
+    - name: Log in to Docker Hub
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKER_USERNAME }}
+        password: ${{ secrets.DOCKER_PASSWORD }}
+        
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: agent-orchestration
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=semver,pattern={{version}}
+          type=semver,pattern={{major}}.{{minor}}
+          type=sha
+          
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./docker/Dockerfile
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        
+    - name: Generate SBOM
+      uses: anchore/sbom-action@v0
+      with:
+        image: agent-orchestration:latest
+        format: spdx-json
+        output-file: sbom.spdx.json
+        
+    - name: Upload SBOM
+      uses: actions/upload-artifact@v3
+      with:
+        name: sbom
+        path: sbom.spdx.json
+
+  # Tests de rendimiento y carga
+  performance:
+    name: 🚀 Performance Tests
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        
+    - name: Install dependencies
+      run: |
+        pip install -r requirements.txt
+        pip install locust pytest-benchmark
+        
+    - name: Run load tests
+      run: |
+        # Simular carga concurrente
+        python -c "
+import asyncio
+from examples.invoice_ingest.parallel_orchestrator import orchestrate_parallel
+import time
+
+async def load_test():
+    start_time = time.time()
+    tasks = []
+    for i in range(100):
+        sections = [f'Section {i}-{j}' for j in range(3)]
+        tasks.append(orchestrate_parallel(sections))
+    
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    end_time = time.time()
+    
+    success_count = sum(1 for r in results if not isinstance(r, Exception))
+    print(f'Processed {success_count}/100 requests in {end_time - start_time:.2f}s')
+    print(f'Throughput: {success_count / (end_time - start_time):.2f} req/s')
+
+asyncio.run(load_test())
+"
+        
+    - name: Run benchmark tests
+      run: |
+        pytest tests/ --benchmark-only --benchmark-json=benchmark.json
+        
+    - name: Upload benchmark results
+      uses: actions/upload-artifact@v3
+      with:
+        name: benchmark-results
+        path: benchmark.json
+
+  # Despliegue a staging
+  deploy-staging:
+    name: 🚀 Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: [test, build]
+    if: github.ref == 'refs/heads/develop'
+    environment: staging
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Deploy to staging
+      run: |
+        echo "Deploying to staging environment..."
+        # Aquí iría el despliegue real (Kubernetes, Docker Swarm, etc.)
+        # docker-compose -f docker/docker-compose.yml up -d
+        
+    - name: Run smoke tests
+      run: |
+        echo "Running smoke tests..."
+        # Tests básicos de funcionalidad en staging
+        python -c "
+import requests
+import time
+
+# Health check
+time.sleep(30)  # Esperar a que levante el servicio
+response = requests.get('http://localhost:8000/health')
+assert response.status_code == 200
+print('✅ Health check passed')
+"
+
+  # Despliegue a producción
+  deploy-production:
+    name: 🚀 Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [test, build, performance]
+    if: github.event_name == 'release'
+    environment: production
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Deploy to production
+      run: |
+        echo "Deploying to production environment..."
+        # Despliegue con blue-green o canary
+        # kubectl apply -f k8s/
+        
+    - name: Run production smoke tests
+      run: |
+        echo "Running production smoke tests..."
+        # Validaciones críticas en producción
+        
+    - name: Notify deployment
+      uses: 8398a7/action-slack@v3
+      with:
+        status: ${{ job.status }}
+        channel: '#deployments'
+        webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+
+  # Monitoreo post-despliegue
+  monitor:
+    name: 📊 Post-deploy Monitoring
+    runs-on: ubuntu-latest
+    needs: [deploy-staging, deploy-production]
+    if: always() && (needs.deploy-staging.result == 'success' || needs.deploy-production.result == 'success')
+    
+    steps:
+    - name: Monitor deployment health
+      run: |
+        echo "Monitoring deployment health for 10 minutes..."
+        # Monitoreo de métricas, logs, etc.
+        
+    - name: Rollback on failure
+      if: failure()
+      run: |
+        echo "Rolling back deployment..."
+        # Lógica de rollback automático
+
+  # Limpieza
+  cleanup:
+    name: 🧹 Cleanup
+    runs-on: ubuntu-latest
+    needs: [test, build, performance, deploy-staging, deploy-production]
+    if: always()
+    
+    steps:
+    - name: Cleanup resources
+      run: |
+        echo "Cleaning up temporary resources..."
+        # Limpiar imágenes Docker, volúmenes, etc.

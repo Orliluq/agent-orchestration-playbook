@@ -1,0 +1,7 @@
+﻿aiohttp
+pytest
+python-dotenv
+prometheus-client
+uvicorn
+fastapi
+requests
