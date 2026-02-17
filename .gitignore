@@ -1,0 +1,7 @@
+﻿.venv/
+*.log
+*.jsonl
+invoice_experience.log
+invoice_records.jsonl
+__pycache__/
+.vscode/
